@@ -1,0 +1,10 @@
+[project]
+name = "yandelope"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "pyinstaller>=6.10.0",
+    "yt-dlp[default]>=2024.8.6",
+]
