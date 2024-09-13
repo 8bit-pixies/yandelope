@@ -81,9 +81,9 @@ def run_job():
     # dpg.get_value("url")
     dpg.set_value("loading_info", LoadingHandler().initial_state)
     dpg.configure_item("button_job", enabled=False, label="Job is Running...")
-    THREAD = AsyncTask(dpg.get_value("url"), dpg.get_value("download_config"))
-    THREAD.start()
-    while hasattr(THREAD, "is_alive") and THREAD.is_alive():
+    job = AsyncTask(dpg.get_value("url"), dpg.get_value("download_config"))
+    job.start()
+    while hasattr(job, "is_alive") and job.is_alive():
         dpg.set_value(
             "loading_info", LoadingHandler().next(dpg.get_value("loading_info"))
         )
