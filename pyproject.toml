@@ -5,6 +5,8 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
+    "dearpygui>=1.11.1",
+    "dearpygui-ext>=0.9.5",
     "pyinstaller>=6.10.0",
     "yt-dlp[default]>=2024.8.6",
 ]
