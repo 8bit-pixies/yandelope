@@ -1,72 +1,13 @@
-import os
-import sys
-import tkinter as tk
-from tkinter import ttk
-from yt_dlp import YoutubeDL
-from options import OPTIONS
 from threading import Thread
-from pathlib import Path
-import io
-from contextlib import redirect_stdout
-import tkinter as tk # Python 3.x
-import tkinter.scrolledtext as ScrolledText
-import logging
+from time import sleep
 
-try:
-    from ctypes import windll  # Only exists on Windows.
+import dearpygui.dearpygui as dpg
+import dearpygui_ext.logger as dpg_logger
 
-    app_id = "com.application"
-    windll.shell32.SetCurrentProcessExplicitAppUserModelID(app_id)
-except ImportError:
-    pass
-
-try:
-    icon_png_path = "icon.png" if Path("icon.png").exists() else str(Path(sys._MEIPASS).joinpath("icon.png"))
-except Exception as _:
-    # not using pyinstaller
-    icon_png_path = "icon.png"
-    pass
+from yt_dlp import YoutubeDL
 
 
-class TextHandler(logging.Handler):
-    # This class allows you to log to a Tkinter Text or ScrolledText widget
-    # Adapted from Moshe Kaplan: https://gist.github.com/moshekaplan/c425f861de7bbf28ef06
-
-    def __init__(self, text):
-        # run the regular Handler __init__
-        logging.Handler.__init__(self)
-        # Store a reference to the Text it will log to
-        self.text = text
-
-    def emit(self, record):
-        msg = self.format(record)
-        def append():
-            self.text.configure(state='normal')
-            self.text.insert(tk.END, msg + '\n')
-            self.text.configure(state='disabled')
-            # Autoscroll to the bottom
-            self.text.yview(tk.END)
-        # This is necessary because we can't modify the Text from other threads
-        self.text.after(0, append)
-        
-class StreamToLogger:
-    """
-    Fake file-like stream object that redirects writes to a logger instance.
-    """
-    def __init__(self, logger, level):
-       self.logger = logger
-       self.level = level
-       self.linebuf = ''
-
-    def write(self, buf):
-       for line in buf.rstrip().splitlines():
-          self.logger.log(self.level, line.rstrip())
-
-    def flush(self):
-        pass
-
-
-class AsyncDownload(Thread):
+class AsyncTask(Thread):
     def __init__(self, url, download_config):
         super().__init__()
 
@@ -75,96 +16,100 @@ class AsyncDownload(Thread):
         self.download_config = download_config
 
     def run(self):
-        with YoutubeDL(OPTIONS.get(self.download_config, OPTION_480P)) as ydl:
+        params = OPTIONS.get(self.download_config, OPTION_480P)
+        params["logger"] = logger
+        logger.error = logger.log_error
+        logger.debug = logger.log_debug
+        with YoutubeDL(params) as ydl:
             ydl.download([self.url])
 
 
-class Application(tk.Frame):
-    def __init__(self, master=None):
-        tk.Frame.__init__(self, master)
-        self.pack(padx=10, pady=10, fill=tk.X, expand=True)
-                
-        self.url = tk.StringVar()
-        self.selected_config = tk.StringVar()
+class LoadingHandler:
+    def __init__(self):
+        _in_progress = ["-", "\\", "|", "/"]
+        self.loading_text = [f"Loading... {x}" for x in _in_progress]
 
-        # URL input
-        self.url_label = ttk.Label(self, text="URL Address:")
-        self.url_label.pack(fill=tk.X, expand=True)
+    @property
+    def initial_state(self):
+        return self.loading_text[0]
 
-        self.url_entry = ttk.Entry(self, textvariable=self.url)
-        self.url_entry.pack(fill=tk.X, expand=True)
-        self.url_entry.focus()
-
-        self.label = ttk.Label(self, text="Preset Configuration:")
-        self.label.pack(fill=tk.X, expand=True)
-        self.config_cb = ttk.Combobox(self, textvariable=self.selected_config)
-        self.config_cb["values"] = list(OPTIONS.keys())
-
-        # prevent typing a value
-        self.config_cb["state"] = "readonly"
-        self.config_cb.pack(fill=tk.X, expand=True)
-        self.config_cb.set(list(OPTIONS.keys())[0])
-
-        ttk.Label(self, text="").pack(fill=tk.X, expand=True) # add space for prettier setup
-
-        self.pb = ttk.Progressbar(self, orient="horizontal", mode="indeterminate")
-        self.pb.pack(fill=tk.X, expand=True)
-        self.pb.pack_forget()
-
-        self.status_label = ttk.Label(self, text="Download Complete")
-        self.status_label.pack(fill=tk.X, expand=True)
-        self.status_label.pack_forget()
-
-        self.button = ttk.Button(self, text="Download 🦌", command=self.handle_button_press)
-        self.button.pack(fill=tk.X, expand=True)
-
-        # Add text widget to display logging info
-        self.st = ScrolledText.ScrolledText(self, height=10)
-
-        # Create textLogger
-        self.text_handler = TextHandler(self.st)
-
-        # Add the handler to logger
-        self.logger = logging.getLogger()        
-        self.logger.addHandler(self.text_handler)
-        sys.stdout = StreamToLogger(self.logger, logging.ERROR)
-        sys.stderr = StreamToLogger(self.logger, logging.ERROR)
-        
-        
-
-    def monitor(self, thread):
-        if thread.is_alive():
-            # check the thread every 100ms
-            self.pb.pack(fill=tk.X, expand=True)
-            self.pb.start()
-            self.st.pack(fill=tk.X, expand=True)
-            self.status_label.pack_forget()
-            self.button.pack_forget()
-            self.after(100, lambda: self.monitor(thread))
-        else:
-            self.pb.stop()
-            self.pb.pack_forget()
-            self.button.pack(fill=tk.X, expand=True)
-            self.status_label.pack(fill=tk.X, expand=True)        
-            self.st.pack(fill=tk.X, expand=True)
-            self.button["state"] = tk.NORMAL
+    def next(self, state=None):
+        index = self.loading_text.index(state) - 1 if state in self.loading_text else 0
+        return self.loading_text[index]
 
 
-    def handle_button_press(self):
-        download_thread = AsyncDownload(
-            url=self.url.get(), download_config=self.selected_config.get()
+OPTION_480P = {
+    "extract_flat": "discard_in_playlist",
+    "format": "(mp4)[height<=480]+ba/(mp4)[height<=480] / wv*+ba/w",
+    "fragment_retries": 10,
+    "ignoreerrors": "only_download",
+    "postprocessors": [
+        {"key": "FFmpegConcat", "only_multi_video": True, "when": "playlist"}
+    ],
+    "retries": 10,
+}
+
+OPTION_AUDIO_ONLY = {
+    "extract_flat": "discard_in_playlist",
+    "format": "(mp4)wa",
+    "fragment_retries": 10,
+    "ignoreerrors": "only_download",
+    "postprocessors": [
+        {"key": "FFmpegConcat", "only_multi_video": True, "when": "playlist"}
+    ],
+    "retries": 10,
+}
+
+OPTION_144P = {
+    "extract_flat": "discard_in_playlist",
+    "format": "(mp4)[height<=144]+ba/(mp4)[height<=144] / wv*+wa/w",
+    "fragment_retries": 10,
+    "ignoreerrors": "only_download",
+    "postprocessors": [
+        {"key": "FFmpegConcat", "only_multi_video": True, "when": "playlist"}
+    ],
+    "retries": 10,
+}
+
+OPTIONS = {"144p": OPTION_144P, "480p": OPTION_480P, "audio-only": OPTION_AUDIO_ONLY}
+OPTION_DEFAULT = "480p"
+
+LOADING_INFO_DEFAULT = "Waiting..."
+
+dpg.create_context()
+
+
+def run_job():
+    # dpg.get_value("url")
+    dpg.set_value("loading_info", LoadingHandler().initial_state)
+    dpg.configure_item("button_job", enabled=False, label="Job is Running...")
+    job = AsyncTask(dpg.get_value("url"), dpg.get_value("download_config"))
+    job.start()
+    while hasattr(job, "is_alive") and job.is_alive():
+        dpg.set_value(
+            "loading_info", LoadingHandler().next(dpg.get_value("loading_info"))
         )
-        download_thread.start()
-        self.monitor(download_thread)
+        sleep(0.125)
+    dpg.configure_item("button_job", enabled=True, label="Run Job")
+    dpg.set_value("loading_info", LOADING_INFO_DEFAULT)
 
 
+with dpg.window(tag="Window") as primary_window:
+    dpg.add_input_text(
+        label="URL", tag="url", source="string_value", default_value="<enter url here>"
+    )
+    dpg.add_combo(
+        tag="download_config", items=list(OPTIONS.keys()), default_value=OPTION_DEFAULT
+    )
+    dpg.add_button(label="Run Job", tag="button_job", callback=run_job)
+    dpg.add_text(label="string", tag="loading_info", default_value=LOADING_INFO_DEFAULT)
+    with dpg.child_window(tag="LogWindow", height=-1):
+        logger = dpg_logger.mvLogger("LogWindow")
 
 
-
-root = tk.Tk()
-root.geometry("400x360")
-root.title("Yandelope")
-# Set window icon.
-app = Application(root)
-app.master.iconphoto(False, tk.PhotoImage(file=icon_png_path))
-app.mainloop()
+dpg.set_primary_window(primary_window, True)
+dpg.create_viewport(title="Window", width=600, height=300)
+dpg.setup_dearpygui()
+dpg.show_viewport()
+dpg.start_dearpygui()
+dpg.destroy_context()
