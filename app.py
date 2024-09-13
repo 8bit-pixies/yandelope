@@ -75,7 +75,7 @@ class AsyncDownload(Thread):
         self.download_config = download_config
 
     def run(self):
-        with YoutubeDL(config.get(self.download_config, OPTION_480P)) as ydl:
+        with YoutubeDL(OPTIONS.get(self.download_config, OPTION_480P)) as ydl:
             ydl.download([self.url])
 
 
